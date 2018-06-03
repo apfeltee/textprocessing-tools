@@ -39,19 +39,18 @@ An alternative to `xargs`, that, unlike `xargs`, does not split at any whitespac
 Born out of the inability of `grep` to handle grouped matches, rbgrep does just that.  
 Obviously, performance-wise, rbgrep is far worse than grep.
 
- + **rbsed.rb**
-
 
  + **revlines.rb**
 
+Like `rev`, except ... it will actually handle *any* kind of text! Binary! ASCII! Chinese! POSIX `rev` does not.
 
  + **runiq.rb**
 
-
- + **urldecode.rb**
+Like `uniq`, *but* contains filesystem-aware actions, such as using `basename` on a list of paths (regardless of whether they physically exist).  
+And a few other goodies.
 
 
  + **utf16fix.rb**
 
-
+Turns Microsoft Windows' ridiculous UTF-16 files into ordinary, portable UTF-8. Next up: UTF-64.
 
