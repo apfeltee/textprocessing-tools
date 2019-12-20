@@ -31,8 +31,12 @@ class GenerateJSON < BaseGenerator
   end
 
   def handle(chunk)
-    @out.write(JSON.pretty_generate(chunk))
-    @out.puts(",")
+    #begin
+      @out.write(JSON.pretty_generate(chunk))
+      @out.puts(",")
+    #rescue Interrupt
+      #return
+    #end
   end
 end
 
@@ -73,18 +77,22 @@ class GenerateText < BaseGenerator
 end
 
 def parse(path, opts, &block)
-  CSV.foreach(path, headers: true) do |row|
-    h = row.to_h
-    isnull = false
-    h.each do |k, v|
-      if opts.nonull then
-        if v.nil? then
-          isnull = true
+  CSV.foreach(path, headers: opts.useheaders) do |row|
+    if opts.useheaders then
+      h = row.to_h
+      isnull = false
+      h.each do |k, v|
+        if opts.nonull then
+          if v.nil? then
+            isnull = true
+          end
         end
       end
-    end
-    if not isnull then
-      block.call(h)
+      if not isnull then
+        block.call(h)
+      end
+    else
+      block.call(row)
     end
   end
 end
@@ -118,6 +126,7 @@ begin
     generate: "json",
     outfile: $stdout,
     ignorecase: true,
+    headers: false,
   })
   prs = OptionParser.new{|prs|
     prs.on("-n", "--no-null", "exclude empty values"){|v|

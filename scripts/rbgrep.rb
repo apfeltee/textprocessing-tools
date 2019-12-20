@@ -42,7 +42,21 @@ require "find"
 # probably because ruby only tracks linefeeds in IO#each_line.
 DEFAULT_READMODE = :linewise
 
+module Util
+  def self.complain(fmt, *a, **kw)
+    msg = (if (a.empty? && kw.empty?) then fmt else sprintf(fmt, *a, **kw) end)
+    $stderr.printf("error: %s\n", msg)
+  end
 
+  def self.xfopen(path, mode)
+    begin
+      return File.open(path, mode)
+    rescue => ex
+      complain("cannot open %p for %s: (%s) %s", path, ((mode[0] == 'r') ? "reading" : "writing"), ex.class.name, ex.message)
+    end
+    return nil
+  end
+end
 
 class IOChunkReader
   def initialize(fh, readmode, rmdata)
@@ -100,16 +114,23 @@ end
 class RbGrep
   attr_accessor :readmode
 
-  def initialize(fh, readmode=DEFAULT_READMODE, rmdata=1024)
+  def initialize(fh, opts, readmode=DEFAULT_READMODE, rmdata=1024)
+    @opts = opts
     @reader = IOChunkReader.new(fh, readmode, rmdata)
   end
 
   def each(rxobj, &block)
+    ci = 0
+    maxlines = @opts.maxlines
     @reader.each do |chunk|
+      if (maxlines > 0) && (ci == maxlines) then
+        return
+      end
       result = chunk.match(rxobj)
       if result then
         block.call(result)
       end
+      ci += 1
     end
   end
 end
@@ -117,6 +138,8 @@ end
 ###################################################
 ### this is turning convoluted quick! who knew. ###
 ###################################################
+
+
 
 def print_filename(filename, fh, opts, hlen)
   if (opts.nofilenames == false) then
@@ -126,6 +149,7 @@ def print_filename(filename, fh, opts, hlen)
         $stdout.printf("%d:", fh.lineno)
       end
       $stdout.write(" ")
+      $stdout.flush
     end
   end
 end
@@ -175,35 +199,56 @@ def print_generic(filename, fh, match, opts, hlen)
   end
 end
 
-def do_rbgrep(pattern, handles, opts)
-  hlen = handles.length
+def do_rbgrep(pattern, items, opts)
+  # keeps count on errors - if >0, then exit respectively
+  ec = 0
+  # keeps count on found matches
+  count = 0
+  hlen = items.length
   rxobj = Regexp.compile(pattern, opts.rxflags)
-  handles.each do |fhpair|
+  items.each do |fhpair|
+    filename, shouldclose = fhpair
+    handle = (
+      if filename.is_a?(String) then
+        Util.xfopen(filename, "rb")
+      else
+        filename
+      end
+    )
     begin
-      handle, filename, shouldclose = fhpair
-      rbg = RbGrep.new(handle)
-      rbg.each(rxobj) do |match|
-        if (not opts.namedgroups.empty?) || (not opts.anongroups.empty?) then
-          print_namedgroups(filename, handle, match, opts, hlen)
-          print_anongroups(filename, handle, match, opts, hlen)
-        else
-          print_generic(filename, handle, match, opts, hlen)
+      if handle != nil then
+        rbg = RbGrep.new(handle, opts)
+        begin
+          rbg.each(rxobj) do |match|
+            if (not opts.namedgroups.empty?) || (not opts.anongroups.empty?) then
+              print_namedgroups(filename, handle, match, opts, hlen)
+              print_anongroups(filename, handle, match, opts, hlen)
+            else
+              print_generic(filename, handle, match, opts, hlen)
+            end
+            count += 1
+          end
+        rescue => ex
+          Util.complain("#each for %p: (%s) %s", filename, ex.class.name, ex.message)
         end
       end
     ensure
-      if shouldclose then
+      if shouldclose && (handle != nil) then
         begin
           handle.close
         rescue => e
           $stderr.printf("error while closing %p: (%s) %s\n", filename, e.class, e.message)
+          ec += 1
         end
       end
     end
   end
+  ec += ((count == 0) ? 1 : 0)
+  exit((ec == 0) ? true : false)
 end
 
 def do_stdinrbgrep(pattern, opts)
-  do_rbgrep(pattern, [[$stdin, "<stdin>", false]], opts)
+  do_rbgrep(pattern, [[$stdin, false]], opts)
 end
 
 #constants: EXTENDED  FIXEDENCODING  IGNORECASE  MULTILINE  NOENCODING
@@ -211,7 +256,10 @@ begin
   opts = OpenStruct.new(
     verbose: false,
     forcestdin: false,
-    printlinenumber: true,
+    nofilenames: true,
+    set_nofilenames: false,
+    printlinenumber: false,
+    maxlines: 0,
     anongroups: [],
     namedgroups: [],
     rxflags: [Regexp::EXTENDED, Regexp::NOENCODING],
@@ -231,6 +279,7 @@ begin
     }
     prs.on("-f", "--nofilename", "do not print filename"){|v|
       opts.nofilenames = true
+      opts.set_nofilenames = true
     }
     prs.on("-r", "--recursive", "search recursively"){|v|
       opts.recursive = true
@@ -246,6 +295,9 @@ begin
     }
     prs.on("-n<name>", "--named=<name>", "print named match group <name>"){|v|
       opts.namedgroups.push(v)
+    }
+    prs.on("-l<n>", "--lines=<n>", "read at most <n> lines"){|v|
+      opts.maxlines = v.to_i
     }
   }
   prs.parse!
@@ -263,6 +315,13 @@ begin
         do_stdinrbgrep(rawpattern, opts)
       end
     else
+      # emulate grep by printing filenames when there are more than one
+      # files, unless explicitly turned off
+      if ARGV.length > 1 then
+        if not opts.set_nofilenames then
+          opts.nofilenames = false
+        end
+      end
       # explicitly check files/dirs, because
       # open() (the system call, not File.open) will gladly
       # open directories as files on Linux, and fopen, or whatever ruby uses,
@@ -270,7 +329,7 @@ begin
       # actual readable file or not ...
       # so it's boilerplate, basically.
       files = []
-      handles = []
+      items = []
       if opts.recursive then
         dirs = []
         # emulate '-r' behavior of grep when no explicit directory was named
@@ -298,17 +357,12 @@ begin
       end
       files.each do |fname|
         if File.file?(fname) then
-          begin
-            fh = File.open(fname, "rb")
-            handles.push([fh, fname, true])
-          rescue => err
-            $stderr.printf("error opening %p: (%s) %s\n", fname, err.class, err.message)
-          end
+          items.push([fname, true])
         else
           $stderr.printf("error: %p is not a file\n", fname)
         end
       end
-      do_rbgrep(rawpattern, handles, opts)
+      do_rbgrep(rawpattern, items, opts)
     end
   end
 end

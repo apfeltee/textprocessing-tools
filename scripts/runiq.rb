@@ -38,7 +38,7 @@ class RubyUniq
   end
 
   def seen?(line)
-    data = line.dup.strip
+    data = line.scrub.strip
     cm = data
     # some options MUST be processed before others.
     if @options.has_key?(:nocase) then
@@ -79,18 +79,6 @@ class RubyUniq
   def printbefore(line, filename, *opts)
     hadprinted = false
     opts.each do |opt|
-=begin
-      case opt
-        when :printcount then
-          if @uniq.key?(line) then
-            $stdout.printf("%8d:", @uniq[line] + 1)
-            hadprinted = true
-          end
-        when :printfile then
-          $stdout.printf("%s:", filename)
-          hadprinted = true
-      end
-=end
     end
     $stdout.write(" ") if hadprinted
   end
@@ -118,7 +106,11 @@ class RubyUniq
         raise "this should not have happened!"
       else
         #@uniq.sort_by{|_, info| info[:count]}.each do |line, _|
-        @uniq.sort_by{|_, info| info[:count]}.each do |cm, info|
+        #@uniq.sort_by{|_, info| info[:count]}.each do |cm, info|
+          #line = info[:line]
+          #writeln(line, filename)
+        #end
+        @uniq.each do |cm, info|
           line = info[:line]
           writeln(line, filename)
         end
